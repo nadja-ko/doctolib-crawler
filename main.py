@@ -1,125 +1,40 @@
+from pathlib import Path
+
 from playwright.sync_api import sync_playwright
 
+from doctolib_crawler.checker import check_appointments
+from doctolib_crawler.config import load_doctors
 
-URL = "https://www.doctolib.de/frauenarzt/berlin/christina-koch"
+CONFIG_PATH = Path("config/doctors.yaml")
 
+def main() -> None:
 
-def check_availability_of_appointments(page):
-    """Check a list of preferred doctors for a new-patient appointment."""
+    doctors = load_doctors(CONFIG_PATH)
 
-    print("Opening doctor profile...")
-
-    page.goto(URL, wait_until="domcontentloaded")
-
-    # Give Doctolib a moment to finish rendering
-    page.wait_for_timeout(1000)
-    # ---------------------------------------------------------
-    # 1. Handle cookie banner
-    # ---------------------------------------------------------
-
-    cookie_button = page.locator("#didomi-notice-disagree-button")
-
-    if cookie_button.count() > 0:
-        print("Cookie dialog dismissed!")
-        cookie_button.click()
-
-    # ---------------------------------------------------------
-    # 2. Click "Termin buchen"
-    # ---------------------------------------------------------
-
-    print("Opening booking...")
-
-    booking_link = page.locator('a[aria-label="Termin buchen"]').filter(
-        visible=True
-    )
-
-    booking_link.wait_for(state="visible", timeout=4000)
-    booking_link.click()
-
-    page.wait_for_load_state("domcontentloaded")
-
-    # ---------------------------------------------------------
-    # 3. Select statutory/public insurance
-    # ---------------------------------------------------------
-
-    print("Selecting statutory insurance...")
-
-    insurance_button = page.get_by_role(
-        "button",
-        name="Gesetzlich versichert",
-        exact=True,
-    )
-
-    insurance_button.wait_for(state="visible", timeout=15000)
-    insurance_button.click()
-
-    # ---------------------------------------------------------
-    # 4. Select new-patient appointment
-    # ---------------------------------------------------------
-
-    print("Selecting 'Erstuntersuchung Neupatient:in'...")
-
-    appointment_button = page.get_by_role(
-        "button",
-        name="Erstuntersuchung Neupatient:in",
-        exact=True,
-    )
-
-    appointment_button.wait_for(state="visible", timeout=15000)
-    appointment_button.click()
-
-    # ---------------------------------------------------------
-    # 5. Wait for availability page
-    # ---------------------------------------------------------
-
-    print("Checking availability...")
-
-    page.wait_for_load_state("domcontentloaded")
-
-    # Give Doctolib a moment to finish rendering the availability state.
-    page.wait_for_timeout(1000)
-
-    # ---------------------------------------------------------
-    # 6. Detect availability
-    # ---------------------------------------------------------
-
-    page_text = page.locator("body").inner_text()
-
-    if "Keine Termine online verfügbar" in page_text:
-        print("\n❌ NO APPOINTMENTS AVAILABLE")
-        available = False
-    else:
-        print("\n🎉 POSSIBLE APPOINTMENTS FOUND!")
-        available = True
-
-    # ---------------------------------------------------------
-    # 7. Show result
-    # ---------------------------------------------------------
-
-    print("\nCurrent URL:")
-    print(page.url)
-
-    return available
-
-
-def main():
-    with sync_playwright() as p:
-
-        browser = p.chromium.launch(
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
             headless=False,
-            executable_path="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            executable_path=(
+                "/Applications/Google Chrome.app/"
+                "Contents/MacOS/Google Chrome"
+            ),
         )
 
-        page = browser.new_page()
+        page = browser.new_page(
+            viewport={"width": 1440, "height": 900}
+        )
 
         try:
-            available = check_availability_of_appointments(page)
+            for doctor in doctors:
+                print(f"\nChecking: {doctor.name}")
+                print(f"URL: {doctor.url}")
 
-            print("\n--------------------------------")
-            print(f"Appointment available: {available}")
-            print("--------------------------------")
+                available = check_appointments(page=page, doctor=doctor)
 
-            input("\nPress ENTER to close...")
+            if available:
+                print("Appointments may be available!")
+            else:
+                print("No appointments available.")
 
         finally:
             browser.close()
@@ -127,4 +42,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+       
