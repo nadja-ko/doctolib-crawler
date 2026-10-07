@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual environment
+.venv/
+
+# Playwright
+playwright-report/
+test-results/
+
+# macOS
+.DS_Store
+
+# Local configuration
+config/doctors.yaml
+
+# Secrets
+.env
+
+# IDE
+.vscode/
+.idea/

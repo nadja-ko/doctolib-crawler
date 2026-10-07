@@ -1,0 +1,6 @@
+doctors:
+  - name: Example Doctor
+    url: https://example.com/doctor
+    insurance: public
+    appointment_type: "Example appointment"
+    
