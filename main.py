@@ -4,6 +4,7 @@ from playwright.sync_api import sync_playwright
 
 from doctolib_crawler.checker import check_appointments
 from doctolib_crawler.config import load_doctors
+from doctolib_crawler.notifications.telegram import send_telegram_message
 
 CONFIG_PATH = Path("config/doctors.yaml")
 
@@ -33,6 +34,12 @@ def main() -> None:
 
             if available:
                 print("Appointments may be available!")
+
+                send_telegram_message(
+                    f"🚨 Appointment available!\n\n"
+                    f"Doctor: {doctor.name}\n"
+                    f"URL: {doctor.url}"
+                )
             else:
                 print("No appointments available.")
 
