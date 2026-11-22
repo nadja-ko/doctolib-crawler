@@ -1,5 +1,7 @@
+import os
 from pathlib import Path
 
+from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 
 from doctolib_crawler.checker import check_appointments
@@ -15,22 +17,32 @@ from doctolib_crawler.state import (
 CONFIG_PATH = Path("config/doctors.yaml")
 STATE_PATH = Path("data/alerted_doctors.json")
 
+load_dotenv()
+
 
 def main() -> None:
     doctors = load_doctors(CONFIG_PATH)
     alerted_doctors = load_alerted_doctors(STATE_PATH)
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(
-            headless=True,  # crawler runs unattended
-            executable_path=(
-                "/Applications/Google Chrome.app/"
-                "Contents/MacOS/Google Chrome"
-            ),
+        chrome_executable_path = os.getenv(
+            "CHROME_EXECUTABLE_PATH"
         )
 
+        if chrome_executable_path:
+            # Use the installed browser on your Mac.
+            browser = playwright.chromium.launch(
+                headless=True,
+                executable_path=chrome_executable_path,
+            )
+        else:
+            # Use Playwright's installed Chromium on the server.
+            browser = playwright.chromium.launch(
+                headless=True,
+            )
+
         page = browser.new_page(
-            viewport={"width": 1440, "height": 900}
+            viewport={"width": 1440, "height": 900}  
         )
 
         try:

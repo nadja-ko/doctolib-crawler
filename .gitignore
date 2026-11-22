@@ -16,6 +16,7 @@ test-results/
 # Local configuration
 config/doctors.yaml
 data/alerted_doctors.json
+logs/
 
 # Secrets
 .env
