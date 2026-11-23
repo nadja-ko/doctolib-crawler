@@ -1,49 +1,117 @@
+
+import logging
+import re
+from enum import StrEnum
+
 from playwright.sync_api import Page
 
 from doctolib_crawler.models import Doctor
 
+logger = logging.getLogger(__name__)
 
-def has_gkv_appointments(page: Page) -> bool:
-    """Return True if the page appears to have usable GKV appointments."""
 
-    # Get all visible text from the availability page
+class AvailabilityStatus(StrEnum):
+    """Possible outcomes of an appointment availability check."""
+
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+    UNKNOWN = "unknown"
+
+
+CALENDAR_HEADING = "Wählen Sie das Datum für den Termin"
+
+NO_APPOINTMENT_MESSAGES = [
+    "Keine Termine online verfügbar",
+    "Es ist momentan leider nicht möglich, diesen Termin online zu buchen.",
+]
+
+APPOINTMENT_TIME_PATTERN = re.compile(
+    r"\b(?:[01]?\d|2[0-3]):[0-5]\d\b"
+)
+
+WEEKDAY_PATTERN = re.compile(
+    r"\b(?:Montag|Dienstag|Mittwoch|Donnerstag|"
+    r"Freitag|Samstag|Sonntag)\b",
+    re.IGNORECASE,
+)
+
+
+def get_gkv_availability(page: Page) -> AvailabilityStatus:
+    """Classify GKV appointment availability from the calendar page."""
+
     page_text = page.locator("body").inner_text()
+    normalized_text = " ".join(page_text.split())
+    normalized_lower = normalized_text.casefold()
 
-    # Ignore self-pay appointments shown to GKV patients
-    if "Selbstzahlertermine" in page_text:
-        return False
+    # 1. Self-pay slots are not useful for a GKV patient.
+    if "selbstzahlertermine" in normalized_lower:
+        logger.info("Only self-pay appointments detected.")
+        return AvailabilityStatus.UNAVAILABLE
 
-    # These messages indicate that no online appointment is available
-    no_appointment_messages = [
-        "Keine Termine online verfügbar",
-        "Es ist momentan leider nicht möglich, diesen Termin online zu buchen.",
+    # 2. Check for explicit no-availability messages.
+    for message in NO_APPOINTMENT_MESSAGES:
+        if message.casefold() in normalized_lower:
+            logger.info("Doctolib explicitly reports no availability.")
+            return AvailabilityStatus.UNAVAILABLE
+
+    # 3. Identify the actual appointment calendar.
+    calendar_heading_lower = CALENDAR_HEADING.casefold()
+
+    calendar_start = normalized_lower.find(calendar_heading_lower)
+
+    if calendar_start == -1:
+        logger.warning(
+            "Expected appointment calendar heading not found."
+        )
+        return AvailabilityStatus.UNKNOWN
+
+    calendar_text = normalized_text[
+        calendar_start + len(CALENDAR_HEADING):
     ]
 
-    for message in no_appointment_messages:
-        if message in page_text:
-            return False
+    # Ignore the practice and appointment details below the calendar.
+    details_marker = "Ihre Termindetails"
+    details_position = calendar_text.casefold().find(
+        details_marker.casefold()
+    )
 
-    # The availability page itself is enough evidence that
-    # there may be an appointment to check manually.
-    return True
+    if details_position != -1:
+        calendar_text = calendar_text[:details_position]
+
+    # 4. Look for actual appointment times.
+    if APPOINTMENT_TIME_PATTERN.search(calendar_text):
+        logger.info("Appointment times detected in calendar.")
+        return AvailabilityStatus.AVAILABLE
+
+    # 5. A rendered calendar with dates but no times means that
+    # no appointment slots are currently displayed.
+    if WEEKDAY_PATTERN.search(calendar_text):
+        logger.info("Calendar loaded, but no appointment times found.")
+        return AvailabilityStatus.UNAVAILABLE
+
+    # 6. Calendar structure is unexpected or incomplete.
+    logger.warning(
+        "Calendar heading found, but no recognizable dates or times."
+    )
+    return AvailabilityStatus.UNKNOWN
 
 
-def check_appointments(page: Page, doctor: Doctor) -> bool:
-    """Check whether GKV-covered appointments are available."""
+def check_appointments(
+    page: Page,
+    doctor: Doctor,
+) -> AvailabilityStatus:
+    """Navigate through Doctolib and check appointment availability."""
 
     # 1. Open the doctor's Doctolib profile
     page.goto(doctor.url, wait_until="domcontentloaded")
-
-    # Give the page time to load the booking elements
     page.wait_for_timeout(5000)
 
-    # 2. Reject the cookie banner, if it is displayed
+    # 2. Reject the cookie banner, if displayed
     cookie_button = page.locator("#didomi-notice-disagree-button")
 
     if cookie_button.count() > 0 and cookie_button.first.is_visible():
         cookie_button.first.click()
 
-    # Give Doctolib time to update the page after dismissing cookies
     page.wait_for_timeout(3000)
 
     # 3. Click "Termin buchen"
@@ -51,7 +119,6 @@ def check_appointments(page: Page, doctor: Doctor) -> bool:
         'a[aria-label="Termin buchen"]'
     )
 
-    # Fallback if the aria-label is not available
     if booking_links.count() == 0:
         booking_links = page.get_by_role(
             "link",
@@ -76,17 +143,14 @@ def check_appointments(page: Page, doctor: Doctor) -> bool:
         )
 
     # 4. Wait for Doctolib to enter the booking flow.
-    # Different doctors can use different booking URLs.
     page.wait_for_url(
         "**/booking**",
         timeout=15000,
     )
 
-    # The page can still be rendering after navigation.
     page.wait_for_timeout(5000)
 
     # 5.A Some practices ask for the medical specialty first.
-    # For this practice, select "Frauenarzt / Gynäkologe".
     speciality_question = page.get_by_text(
         "Fachgebiet wählen",
         exact=True,
@@ -101,13 +165,9 @@ def check_appointments(page: Page, doctor: Doctor) -> bool:
             exact=True,
         ).click()
 
-        # Give Doctolib time to load the next booking step
-        page.wait_for_timeout(3000)   
+        page.wait_for_timeout(3000)
 
-
-    # 5.B Some doctors/practices ask whether we have visited
-    # the doctor or practice before.
-    # The wording varies between Doctolib booking flows.
+    # 5.B Some practices ask whether the patient has visited before.
     previous_visit_question = page.get_by_text(
         "bereits besucht?",
         exact=False,
@@ -123,11 +183,9 @@ def check_appointments(page: Page, doctor: Doctor) -> bool:
             exact=True,
         ).click()
 
-        # Give Doctolib time to load the next step
         page.wait_for_timeout(2000)
 
-
-    # 6. Select the patient's insurance type
+    # 6. Select the patient's insurance type.
     if doctor.insurance == "public":
         insurance_name = "Gesetzlich versichert"
     elif doctor.insurance == "private":
@@ -143,18 +201,16 @@ def check_appointments(page: Page, doctor: Doctor) -> bool:
         exact=True,
     ).click()
 
-    # 7. Select the appointment type
+    # 7. Select the appointment type.
     page.get_by_role(
         "button",
         name=doctor.appointment_type,
         exact=True,
     ).click()
 
-    # Give the next page time to load
     page.wait_for_timeout(3000)
 
-        # 8. Some group practices ask the patient to choose a doctor.
-    # We accept any doctor by selecting "Ich habe keine Präferenz".
+    # 8. Some group practices ask the patient to choose a doctor.
     doctor_preference = page.get_by_text(
         "Wählen Sie eine/n Ärzt:in oder Therapeut:in",
         exact=False,
@@ -176,8 +232,7 @@ def check_appointments(page: Page, doctor: Doctor) -> bool:
 
         preference_option.first.click()
 
-    # Give the availability page time to load
     page.wait_for_timeout(3000)
 
-    # 9. Check whether GKV-covered appointments are available
-    return has_gkv_appointments(page)
+    # 9. Classify the availability page.
+    return get_gkv_availability(page)
